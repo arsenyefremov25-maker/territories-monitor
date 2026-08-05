@@ -13,25 +13,19 @@ BASE_DOCUMENT_DATE = date(2025, 2, 28)
 
 CATEGORY_POSSIBLE = "Території можливих бойових дій"
 CATEGORY_ACTIVE = "Території активних бойових дій"
-CATEGORY_ACTIVE_DIGITAL = (
-    "Території активних бойових дій, на яких функціонують "
-    "державні електронні інформаційні ресурси"
-)
 CATEGORY_OCCUPIED = "Тимчасово окуповані території"
 
 EXPECTED_CATEGORIES = {
     CATEGORY_POSSIBLE,
     CATEGORY_ACTIVE,
-    CATEGORY_ACTIVE_DIGITAL,
     CATEGORY_OCCUPIED,
 }
 
-# The official DOCX has historically contained five data tables. The final two
-# may both belong to the temporarily occupied territories section.
+# Used only for backward compatibility with the former multi-table layout.
 FALLBACK_CATEGORY_BY_TABLE_INDEX = {
     1: CATEGORY_POSSIBLE,
     2: CATEGORY_ACTIVE,
-    3: CATEGORY_ACTIVE_DIGITAL,
+    3: CATEGORY_ACTIVE,
     4: CATEGORY_OCCUPIED,
     5: CATEGORY_OCCUPIED,
 }
@@ -40,7 +34,7 @@ FALLBACK_CATEGORY_BY_TABLE_INDEX = {
 @dataclass(frozen=True)
 class RuntimeSettings:
     database_url: str | None
-    min_rows: int = 100
+    min_rows: int = 5_000
     min_previous_ratio: float = 0.65
     request_timeout_seconds: int = 60
 
@@ -54,7 +48,7 @@ def load_settings(require_database: bool = False) -> RuntimeSettings:
 
     return RuntimeSettings(
         database_url=database_url,
-        min_rows=int(os.getenv("MIN_EXPECTED_ROWS", "100")),
+        min_rows=int(os.getenv("MIN_EXPECTED_ROWS", "5000")),
         min_previous_ratio=float(os.getenv("MIN_PREVIOUS_ROW_RATIO", "0.65")),
         request_timeout_seconds=int(os.getenv("REQUEST_TIMEOUT_SECONDS", "60")),
     )

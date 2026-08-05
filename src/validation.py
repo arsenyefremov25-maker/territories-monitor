@@ -27,7 +27,7 @@ class ValidationReport:
 def validate_snapshot(
     frame: pd.DataFrame,
     *,
-    min_rows: int = 100,
+    min_rows: int = 5_000,
     previous_row_count: int | None = None,
     min_previous_ratio: float = 0.65,
     allow_large_drop: bool = False,
@@ -78,9 +78,10 @@ def validate_snapshot(
 
     categories = set(frame["category"].dropna().astype(str))
     report.metrics["categories"] = sorted(categories)
-    if len(categories) < 3:
+    missing_categories = EXPECTED_CATEGORIES - categories
+    if missing_categories:
         report.errors.append(
-            f"Виявлено лише {len(categories)} категорії; очікується щонайменше 3."
+            "Не знайдено очікувані категорії: " + ", ".join(sorted(missing_categories))
         )
 
     unexpected_categories = categories - EXPECTED_CATEGORIES
@@ -89,16 +90,39 @@ def validate_snapshot(
             "Невідомі категорії: " + ", ".join(sorted(unexpected_categories))
         )
 
+    missing_start_dates = int(frame["status_from"].isna().sum())
+    report.metrics["missing_status_from"] = missing_start_dates
+    if missing_start_dates:
+        report.warnings.append(
+            f"Дата початку не зазначена для {missing_start_dates} записів в офіційному файлі."
+        )
+
+    missing_systems = int(frame["systems_functioning"].isna().sum())
+    report.metrics["missing_systems_functioning"] = missing_systems
+    if missing_systems:
+        report.warnings.append(
+            "Ознака функціонування інформаційних систем не зазначена для "
+            f"{missing_systems} записів в офіційному файлі."
+        )
+
     invalid_date_order = frame[
         frame["status_from"].notna()
         & frame["status_to"].notna()
         & (frame["status_to"] < frame["status_from"])
     ]
-    report.metrics["invalid_date_order"] = len(invalid_date_order)
-    if not invalid_date_order.empty:
-        report.errors.append(
-            f"Для {len(invalid_date_order)} записів кінцева дата раніше початкової."
+    invalid_date_count = len(invalid_date_order)
+    report.metrics["invalid_date_order"] = invalid_date_count
+    if invalid_date_count:
+        message = (
+            f"Для {invalid_date_count} записів в офіційному файлі кінцева дата "
+            "раніше початкової."
         )
+        if invalid_date_count > 10:
+            report.errors.append(message)
+        else:
+            report.warnings.append(
+                message + " Дані збережуться без автоматичного виправлення."
+            )
 
     if previous_row_count:
         ratio = len(frame) / previous_row_count

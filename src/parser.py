@@ -17,7 +17,6 @@ from docx.text.paragraph import Paragraph
 
 from src.config import (
     CATEGORY_ACTIVE,
-    CATEGORY_ACTIVE_DIGITAL,
     CATEGORY_OCCUPIED,
     CATEGORY_POSSIBLE,
     FALLBACK_CATEGORY_BY_TABLE_INDEX,
@@ -28,9 +27,12 @@ OUTPUT_COLUMNS = [
     "full_code",
     "hromada_code_7",
     "territory_name",
+    "hromada_name",
+    "settlement_name",
     "oblast",
     "rayon",
     "category",
+    "systems_functioning",
     "status_from",
     "status_to",
 ]
@@ -78,6 +80,15 @@ def hromada_code_7(full_code: str) -> str | None:
     return match.group(1) if match else None
 
 
+def normalize_yes_no(value: object) -> bool | None:
+    cleaned = normalize_whitespace(value).lower().strip(" .")
+    if cleaned in {"так", "yes", "true", "1"}:
+        return True
+    if cleaned in {"ні", "нi", "no", "false", "0"}:
+        return False
+    return None
+
+
 def is_oblast_row(value: object) -> bool:
     cleaned = clean_heading(value).lower()
     return (
@@ -101,34 +112,21 @@ def normalize_administrative_name(value: object) -> str | None:
     return cleaned[0].upper() + cleaned[1:]
 
 
+def normalize_category(value: object) -> str | None:
+    lowered = normalize_whitespace(value).lower()
+    if "тимчасово окупован" in lowered:
+        return CATEGORY_OCCUPIED
+    if "можливих бойових дій" in lowered:
+        return CATEGORY_POSSIBLE
+    if "активних бойових дій" in lowered:
+        return CATEGORY_ACTIVE
+    return None
+
+
 def infer_category(context_text: str, table_index: int) -> str:
-    lowered = normalize_whitespace(context_text).lower()
-
-    # Several section headings may remain in the surrounding context. Select the
-    # category whose identifying phrase occurs latest, i.e. closest to the table.
-    candidates: list[tuple[int, int, str]] = []
-
-    digital_position = max(
-        lowered.rfind("державні електронні"),
-        lowered.rfind("електронні інформаційні ресурси"),
-    )
-    active_position = lowered.rfind("активних бойових дій")
-    if digital_position >= 0 and active_position >= 0:
-        candidates.append((max(digital_position, active_position), 4, CATEGORY_ACTIVE_DIGITAL))
-
-    possible_position = lowered.rfind("можливих бойових дій")
-    if possible_position >= 0:
-        candidates.append((possible_position, 3, CATEGORY_POSSIBLE))
-
-    if active_position >= 0:
-        candidates.append((active_position, 2, CATEGORY_ACTIVE))
-
-    occupied_position = lowered.rfind("тимчасово окупован")
-    if occupied_position >= 0:
-        candidates.append((occupied_position, 3, CATEGORY_OCCUPIED))
-
-    if candidates:
-        return max(candidates, key=lambda item: (item[0], item[1]))[2]
+    category = normalize_category(context_text)
+    if category:
+        return category
 
     fallback = FALLBACK_CATEGORY_BY_TABLE_INDEX.get(table_index)
     if not fallback:
@@ -143,14 +141,19 @@ def make_record_key(
     full_code: str,
     category: str,
     status_from: date | None,
+    identity_hint: str = "",
 ) -> str:
-    # status_to intentionally does not participate: when only the end date changes,
-    # the update is classified as MODIFIED rather than REMOVED + ADDED.
+    # status_to and systems_functioning intentionally do not participate: when
+    # only these fields change, the event is classified as MODIFIED.
+    # identity_hint contains the administrative path. It is needed because the
+    # official source currently contains a repeated KATOTTG code for different
+    # settlement labels.
     raw = "|".join(
         [
             full_code,
             normalize_whitespace(category).lower(),
             status_from.isoformat() if status_from else "",
+            normalize_whitespace(identity_hint).lower(),
         ]
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -172,6 +175,51 @@ def _table_preview(table: Table, max_rows: int = 5) -> str:
     return " ".join(parts)
 
 
+def _direct_nine_column_row(cells: list[str]) -> dict[str, object] | None:
+    """Parse the consolidated nine-column layout used in the current DOCX."""
+    if len(cells) < 9 or not is_territory_code(cells[4]):
+        return None
+
+    full_code = normalize_code(cells[4])
+    category = normalize_category(cells[5])
+    if not category:
+        return None
+
+    oblast = normalize_administrative_name(cells[0])
+    rayon = normalize_administrative_name(cells[1])
+    hromada_name = clean_heading(cells[2]) or None
+    settlement_name = clean_heading(cells[3]) or None
+    territory_name = settlement_name or hromada_name or rayon or oblast
+    if not territory_name:
+        return None
+
+    status_from = normalize_date(cells[6])
+    status_to = normalize_date(cells[7])
+    identity_hint = "|".join(
+        value or "" for value in (oblast, rayon, hromada_name, settlement_name)
+    )
+
+    return {
+        "record_key": make_record_key(
+            full_code,
+            category,
+            status_from,
+            identity_hint=identity_hint,
+        ),
+        "full_code": full_code,
+        "hromada_code_7": hromada_code_7(full_code),
+        "territory_name": territory_name,
+        "hromada_name": hromada_name,
+        "settlement_name": settlement_name,
+        "oblast": oblast,
+        "rayon": rayon,
+        "category": category,
+        "systems_functioning": normalize_yes_no(cells[8]),
+        "status_from": status_from,
+        "status_to": status_to,
+    }
+
+
 def extract_rows(docx_content: bytes) -> pd.DataFrame:
     document = Document(BytesIO(docx_content))
     if not document.tables:
@@ -190,7 +238,7 @@ def extract_rows(docx_content: bytes) -> pd.DataFrame:
 
         table_index += 1
         context = " ".join([*recent_paragraphs, _table_preview(block)])
-        category = infer_category(context, table_index)
+        legacy_category: str | None = None
         current_oblast: str | None = None
         current_rayon: str | None = None
 
@@ -199,10 +247,16 @@ def extract_rows(docx_content: bytes) -> pd.DataFrame:
             if not cells or all(not cell for cell in cells):
                 continue
 
+            direct_row = _direct_nine_column_row(cells)
+            if direct_row:
+                rows.append(direct_row)
+                continue
+
+            # Backward compatibility with the former four-column layout.
             first = cells[0]
             second = cells[1] if len(cells) > 1 else ""
-
             heading_candidate = first or second
+
             if is_oblast_row(heading_candidate) and not is_territory_code(heading_candidate):
                 current_oblast = normalize_administrative_name(heading_candidate)
                 current_rayon = None
@@ -215,6 +269,9 @@ def extract_rows(docx_content: bytes) -> pd.DataFrame:
             if len(cells) < 4 or not is_territory_code(first):
                 continue
 
+            if legacy_category is None:
+                legacy_category = infer_category(context, table_index)
+
             full_code = normalize_code(first)
             territory_name = clean_heading(second)
             if not territory_name:
@@ -222,17 +279,26 @@ def extract_rows(docx_content: bytes) -> pd.DataFrame:
 
             status_from = normalize_date(cells[2])
             status_to = normalize_date(cells[3])
-            record_key = make_record_key(full_code, category, status_from)
-
+            identity_hint = "|".join(
+                value or "" for value in (current_oblast, current_rayon, territory_name)
+            )
             rows.append(
                 {
-                    "record_key": record_key,
+                    "record_key": make_record_key(
+                        full_code,
+                        legacy_category,
+                        status_from,
+                        identity_hint=identity_hint,
+                    ),
                     "full_code": full_code,
                     "hromada_code_7": hromada_code_7(full_code),
                     "territory_name": territory_name,
+                    "hromada_name": territory_name,
+                    "settlement_name": None,
                     "oblast": current_oblast,
                     "rayon": current_rayon,
-                    "category": category,
+                    "category": legacy_category,
+                    "systems_functioning": None,
                     "status_from": status_from,
                     "status_to": status_to,
                 }
@@ -245,6 +311,13 @@ def extract_rows(docx_content: bytes) -> pd.DataFrame:
         )
 
     return frame.sort_values(
-        ["oblast", "rayon", "territory_name", "category", "status_from"],
+        [
+            "oblast",
+            "rayon",
+            "hromada_name",
+            "territory_name",
+            "category",
+            "status_from",
+        ],
         na_position="last",
     ).reset_index(drop=True)

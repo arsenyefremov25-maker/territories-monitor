@@ -102,9 +102,12 @@ def calculate_changes(
         "full_code",
         "hromada_code_7",
         "territory_name",
+        "hromada_name",
+        "settlement_name",
         "oblast",
         "rayon",
         "category",
+        "systems_functioning",
         "status_from",
         "status_to",
     )
@@ -164,7 +167,8 @@ class TerritoryRepository:
             """
             select
                 record_key, full_code, hromada_code_7, territory_name,
-                oblast, rayon, category, status_from, status_to
+                hromada_name, settlement_name, oblast, rayon, category,
+                systems_functioning, status_from, status_to
             from territory_status_history
             where source_document_id = :document_id
             order by territory_name, category, status_from
@@ -196,10 +200,12 @@ class TerritoryRepository:
             """
             insert into territory_status_history (
                 source_document_id, record_key, full_code, hromada_code_7,
-                territory_name, oblast, rayon, category, status_from, status_to
+                territory_name, hromada_name, settlement_name, oblast, rayon,
+                category, systems_functioning, status_from, status_to
             ) values (
                 :source_document_id, :record_key, :full_code, :hromada_code_7,
-                :territory_name, :oblast, :rayon, :category, :status_from, :status_to
+                :territory_name, :hromada_name, :settlement_name, :oblast, :rayon,
+                :category, :systems_functioning, :status_from, :status_to
             )
             """
         )
