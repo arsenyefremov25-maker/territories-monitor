@@ -1,0 +1,50 @@
+name: Update territories
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow_large_drop:
+        description: "Allow a large drop in row count after manual review"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "20 5 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: territories-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Update database
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ "${{ inputs.allow_large_drop }}" = "true" ]; then
+            python run_parser.py --allow-large-drop
+          else
+            python run_parser.py
+          fi
