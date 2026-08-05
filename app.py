@@ -10,6 +10,7 @@ import requests
 import streamlit as st
 
 from src.database import create_database_engine
+from src.history_view import render_history_tab
 from src.territory_service import (
     load_current_territories,
     load_document_history,
@@ -434,46 +435,7 @@ with tab1:
     )
 
 with tab2:
-    st.subheader("Історія статусу території в поточній редакції")
-    history_search = st.text_input(
-        "Назва території, району, області або код",
-        key="history_search",
-    )
-    if history_search:
-        mask = (
-            df["territory_name"].str.contains(history_search, case=False, na=False)
-            | df["full_code"].str.contains(history_search, case=False, na=False)
-            | df["hromada_code_7"].astype(str).str.contains(history_search, case=False, na=False)
-            | df["rayon"].str.contains(history_search, case=False, na=False)
-            | df["oblast"].str.contains(history_search, case=False, na=False)
-        )
-        history = df[mask].sort_values(["territory_name", "status_from"])
-        st.metric("Знайдено записів", len(history))
-        st.dataframe(prepare_display_table(history), use_container_width=True, hide_index=True)
-    else:
-        st.info("Введіть назву або код.")
-
-    with st.expander("Збережені редакції документа"):
-        display_history = document_history.copy()
-        display_history["base_document_date"] = display_history["base_document_date"].dt.strftime("%d.%m.%Y")
-        display_history["edition_date"] = display_history["edition_date"].dt.strftime("%d.%m.%Y").fillna("не визначена")
-        display_history["loaded_at"] = display_history["loaded_at"].dt.strftime("%d.%m.%Y %H:%M")
-        st.dataframe(
-            display_history.rename(
-                columns={
-                    "id": "ID",
-                    "base_document_number": "Номер наказу",
-                    "base_document_date": "Дата наказу",
-                    "edition_date": "Дата редакції",
-                    "row_count": "Записів",
-                    "loaded_at": "Завантажено",
-                    "source_page_url": "Сторінка джерела",
-                    "source_file_url": "Файл джерела",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
+    render_history_tab(df, document_history)
 
 with tab3:
     st.subheader("Зміни відносно попередньої завантаженої редакції")
