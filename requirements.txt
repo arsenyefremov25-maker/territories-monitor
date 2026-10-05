@@ -10,3 +10,5 @@ beautifulsoup4>=4.12,<5
 python-docx>=1.1,<2
 lxml>=5,<7
 pytest>=8,<9
+
+# force-environment-rebuild-2026-10-05
